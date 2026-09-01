@@ -2,7 +2,15 @@ module code
 
 go 1.27.0
 
-require github.com/gin-gonic/gin v1.12.0
+require (
+	github.com/getsentry/sentry-go v0.49.0
+	github.com/getsentry/sentry-go/gin v0.49.0
+	github.com/gin-contrib/cors v1.7.7
+	github.com/gin-gonic/gin v1.12.0
+	github.com/go-playground/validator/v10 v10.30.3
+	github.com/jackc/pgx/v5 v5.10.0
+	github.com/joho/godotenv v1.5.1
+)
 
 require (
 	cel.dev/expr v0.25.1 // indirect
@@ -25,15 +33,11 @@ require (
 	github.com/elastic/go-windows v1.0.2 // indirect
 	github.com/fatih/structtag v1.2.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
-	github.com/getsentry/sentry-go v0.49.0 // indirect
-	github.com/getsentry/sentry-go/gin v0.49.0 // indirect
-	github.com/gin-contrib/cors v1.7.7 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
 	github.com/go-faster/city v1.0.1 // indirect
 	github.com/go-faster/errors v0.7.1 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/go-playground/validator/v10 v10.30.3 // indirect
 	github.com/go-sql-driver/mysql v1.10.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
@@ -45,10 +49,8 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.10.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
-	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.19.1 // indirect
@@ -74,7 +76,7 @@ require (
 	github.com/pressly/goose/v3 v3.27.3 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/quic-go/quic-go v0.59.0 // indirect
+	github.com/quic-go/quic-go v0.59.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/riza-io/grpc-go v0.2.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
