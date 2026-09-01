@@ -396,7 +396,7 @@ func TestListLinksFirstPage(t *testing.T) {
 	router := newTestRouter(newFakeStore())
 	seed(t, router, 12)
 
-	recorder := do(t, router, http.MethodGet, "/api/links?range=[0,10]", "")
+	recorder := do(t, router, http.MethodGet, "/api/links?range=[0,9]", "")
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
 	}
@@ -412,8 +412,8 @@ func TestListLinksFirstPage(t *testing.T) {
 		t.Fatalf("wrong page: %v .. %v", got[0]["short_name"], got[9]["short_name"])
 	}
 
-	if header := recorder.Header().Get("Content-Range"); header != "links 0-10/12" {
-		t.Fatalf("Content-Range = %q, want %q", header, "links 0-10/12")
+	if header := recorder.Header().Get("Content-Range"); header != "links 0-9/12" {
+		t.Fatalf("Content-Range = %q, want %q", header, "links 0-9/12")
 	}
 }
 
@@ -421,7 +421,7 @@ func TestListLinksSecondPage(t *testing.T) {
 	router := newTestRouter(newFakeStore())
 	seed(t, router, 11)
 
-	recorder := do(t, router, http.MethodGet, "/api/links?range=%5B5,%2010%5D", "")
+	recorder := do(t, router, http.MethodGet, "/api/links?range=%5B5,%209%5D", "")
 
 	var got []map[string]any
 	decode(t, recorder, &got)
@@ -434,8 +434,8 @@ func TestListLinksSecondPage(t *testing.T) {
 		t.Fatalf("wrong page: %v .. %v", got[0]["short_name"], got[4]["short_name"])
 	}
 
-	if header := recorder.Header().Get("Content-Range"); header != "links 5-10/11" {
-		t.Fatalf("Content-Range = %q, want %q", header, "links 5-10/11")
+	if header := recorder.Header().Get("Content-Range"); header != "links 5-9/11" {
+		t.Fatalf("Content-Range = %q, want %q", header, "links 5-9/11")
 	}
 }
 
@@ -443,7 +443,7 @@ func TestListLinksRangePastTheEnd(t *testing.T) {
 	router := newTestRouter(newFakeStore())
 	seed(t, router, 3)
 
-	recorder := do(t, router, http.MethodGet, "/api/links?range=[10,20]", "")
+	recorder := do(t, router, http.MethodGet, "/api/links?range=[10,19]", "")
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
 	}
@@ -459,8 +459,8 @@ func TestListLinksWithoutRangeReportsWholeCollection(t *testing.T) {
 
 	recorder := do(t, router, http.MethodGet, "/api/links", "")
 
-	if header := recorder.Header().Get("Content-Range"); header != "links 0-3/3" {
-		t.Fatalf("Content-Range = %q, want %q", header, "links 0-3/3")
+	if header := recorder.Header().Get("Content-Range"); header != "links 0-2/3" {
+		t.Fatalf("Content-Range = %q, want %q", header, "links 0-2/3")
 	}
 }
 

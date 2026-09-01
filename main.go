@@ -5,9 +5,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	sentrygin "github.com/getsentry/sentry-go/gin"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
@@ -20,6 +22,7 @@ import (
 
 const (
 	defaultPort      = "8080"
+	defaultFrontend  = "http://localhost:5173"
 	sentryFlushLimit = 2 * time.Second
 	connectTimeout   = 10 * time.Second
 )
@@ -40,9 +43,19 @@ func initSentry() bool {
 	return true
 }
 
-func newRouter(withSentry bool, handler *api.Handler) *gin.Engine {
+func newRouter(withSentry bool, handler *api.Handler, allowedOrigins []string) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
+
+	if len(allowedOrigins) > 0 {
+		router.Use(cors.New(cors.Config{
+			AllowOrigins:  allowedOrigins,
+			AllowMethods:  []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
+			AllowHeaders:  []string{"Origin", "Content-Type", "Accept"},
+			ExposeHeaders: []string{"Content-Range"},
+			MaxAge:        12 * time.Hour,
+		}))
+	}
 
 	if withSentry {
 		router.Use(sentrygin.New(sentrygin.Options{Repanic: true}))
@@ -98,7 +111,9 @@ func main() {
 	port := env("PORT", defaultPort)
 	handler := api.NewHandler(store.New(pool), env("BASE_URL", "http://localhost:"+port))
 
-	if err := newRouter(withSentry, handler).Run(":" + port); err != nil {
+	origins := strings.Split(env("CORS_ORIGINS", defaultFrontend), ",")
+
+	if err := newRouter(withSentry, handler, origins).Run(":" + port); err != nil {
 		log.Fatalf("server stopped: %v", err)
 	}
 }

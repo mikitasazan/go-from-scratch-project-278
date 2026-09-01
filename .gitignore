@@ -3,3 +3,4 @@ coverage.out
 .env
 code
 bin/link-shortener
+node_modules/

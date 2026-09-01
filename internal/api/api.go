@@ -87,9 +87,11 @@ func (h *Handler) response(link store.Link) linkResponse {
 	}
 }
 
-// parseRange reads the ?range=[start,end] parameter used for pagination. The
-// bounds are item positions, end excluded: [0,10] is the first ten links.
-// A missing parameter means "the whole collection".
+// parseRange reads the ?range=[start,end] parameter used for pagination. Both
+// bounds are inclusive item positions, so [0,9] is the first ten links — the
+// convention the step's own hint states and the one the supplied frontend
+// sends (it asks for [0,4] and draws five rows). A missing parameter means
+// "the whole collection".
 func parseRange(raw string) (start, end int64, ok bool) {
 	trimmed := strings.TrimSpace(raw)
 	trimmed = strings.TrimPrefix(trimmed, "[")
@@ -134,11 +136,11 @@ func (h *Handler) list(c *gin.Context) {
 
 	if ok {
 		links, err = h.store.ListLinksRange(ctx, store.ListLinksRangeParams{
-			Limit:  int32(end - start),
+			Limit:  int32(end - start + 1),
 			Offset: int32(start),
 		})
 	} else {
-		start, end = 0, total
+		start, end = 0, max(total-1, 0)
 		links, err = h.store.ListLinks(ctx)
 	}
 
