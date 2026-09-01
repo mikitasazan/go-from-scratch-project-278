@@ -23,7 +23,47 @@ cd go-from-scratch-project-278
 
 ## Использование
 
-<!-- Добавьте примеры запуска и запись asciinema — именно это смотрит работодатель -->
+### Локально, без Docker
+
+```bash
+make run
+curl http://localhost:8080/ping   # pong
+```
+
+### Локально, в Docker — так же, как на хостинге
+
+`Dockerfile` собирает бинарник и goose, а `bin/run.sh` накатывает миграции и
+запускает приложение:
+
+```bash
+docker network create ls-net
+docker run -d --name ls-pg --network ls-net \
+  -e POSTGRES_USER=links -e POSTGRES_PASSWORD=secret -e POSTGRES_DB=links \
+  postgres:18-alpine
+docker build -t link-shortener:local .
+docker run -d --name ls-app --network ls-net -p 8080:8080 \
+  -e PORT=8080 \
+  -e DATABASE_URL="postgres://links:secret@ls-pg:5432/links?sslmode=disable" \
+  link-shortener:local
+curl http://localhost:8080/ping   # pong
+```
+
+### Переменные окружения
+
+| Переменная | Обязательна | Зачем |
+|---|---|---|
+| `PORT` | нет, по умолчанию `8080` | порт, на котором слушает сервис |
+| `DATABASE_URL` | да, при запуске через `bin/run.sh` | строка подключения к PostgreSQL |
+| `SENTRY_DSN` | нет | мониторинг ошибок; пустая переменная просто выключает его |
+
+### Развёртывание на хостинге
+
+Шаг проекта предлагал выложить сервис на Render и подключить мониторинг ошибок
+в Bugsink. Этот шаг пропущен намеренно: проект ведётся как локальная разработка,
+внешние аккаунты не заводились. Всё, что для деплоя нужно, в репозитории есть —
+`Dockerfile` и `bin/run.sh` собираются и запускаются, что проверено локально
+(команды выше). Код читает `SENTRY_DSN` из окружения, поэтому мониторинг
+включается одной переменной, без правок кода.
 
 ---
 

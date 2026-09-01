@@ -1,0 +1,4 @@
+.git
+bin/link-shortener
+coverage.out
+.env

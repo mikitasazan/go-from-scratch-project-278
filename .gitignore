@@ -1,4 +1,5 @@
-bin/
+
 coverage.out
 .env
 code
+bin/link-shortener

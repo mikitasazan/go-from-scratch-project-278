@@ -14,7 +14,7 @@ func TestPing(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/ping", nil)
 
-	newRouter().ServeHTTP(recorder, request)
+	newRouter(false).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
