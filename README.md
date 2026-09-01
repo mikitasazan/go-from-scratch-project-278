@@ -3,18 +3,53 @@
 [![hexlet-check](https://github.com/mikitasazan/go-from-scratch-project-278/actions/workflows/hexlet-check.yml/badge.svg)](https://github.com/mikitasazan/go-from-scratch-project-278/actions)
 [![checks](https://github.com/mikitasazan/go-from-scratch-project-278/actions/workflows/checks.yml/badge.svg)](https://github.com/mikitasazan/go-from-scratch-project-278/actions/workflows/checks.yml)
 
-Спроектируйте приложение для удобных ссылок
+Сервис коротких ссылок: превращает длинный адрес в короткий код, ведёт по нему
+на исходный адрес и записывает каждый переход.
 
 Учебный проект Хекслета: https://ru.hexlet.io/programs/go-from-scratch
 
+## Что умеет
+
+- CRUD коротких ссылок через `/api/links`, с постраничной выдачей.
+- Короткое имя можно задать самому или оставить пустым — сервер сгенерирует.
+- `GET /r/:code` переводит на исходный адрес и записывает посещение: IP,
+  User-Agent, Referer, код ответа.
+- `GET /api/link_visits` отдаёт журнал посещений, тоже постранично.
+- Веб-интерфейс из пакета Хекслета работает поверх этого API.
 
 ## Стек
 
-- Go
+- Go 1.27, [Gin](https://gin-gonic.com/) — HTTP-слой и валидация
+  ([go-playground/validator](https://github.com/go-playground/validator))
+- PostgreSQL, [pgx](https://github.com/jackc/pgx) — драйвер,
+  [sqlc](https://sqlc.dev/) — запросы генерируются из SQL,
+  [goose](https://github.com/pressly/goose) — миграции
+- [Caddy](https://caddyserver.com/) — раздаёт статику и проксирует API
+- [sentry-go](https://github.com/getsentry/sentry-go) — мониторинг ошибок,
+  включается переменной `SENTRY_DSN`
+- Docker, GitHub Actions, `golangci-lint`
+- Фронтенд — пакет `@hexlet/project-url-shortener-frontend`
+
+## API
+
+| Метод | Путь | Что делает |
+|---|---|---|
+| `GET` | `/ping` | health-check, отвечает `pong` |
+| `GET` | `/api/links` | список ссылок; `?range=[0,9]` — окно, обе границы включительно |
+| `POST` | `/api/links` | создаёт ссылку; `short_name` не обязателен |
+| `GET` | `/api/links/:id` | одна ссылка |
+| `PUT` | `/api/links/:id` | меняет ссылку |
+| `DELETE` | `/api/links/:id` | удаляет ссылку |
+| `GET` | `/api/link_visits` | журнал переходов, с тем же `?range=` |
+| `GET` | `/r/:code` | переход по короткой ссылке, `302` |
+
+Списки отдают заголовок `Content-Range`, например `links 0-9/42`.
+
+Ошибки приходят в одном виде: `400` c `{"error": "invalid request"}` на
+сломанный JSON и `422` c `{"errors": {"<поле>": "<сообщение>"}}` на всё
+остальное, включая занятое короткое имя.
 
 ## Установка
-
-<!-- Опишите установку: клонирование, зависимости, переменные окружения -->
 
 ```bash
 git clone https://github.com/mikitasazan/go-from-scratch-project-278.git
