@@ -8,7 +8,7 @@ RUN --mount=type=cache,target=/root/.npm \
     npm ci --prefer-offline --no-audit
 
 # 2) Build backend
-FROM golang:1.27-alpine AS backend-builder
+FROM golang:1.26-alpine AS backend-builder
 RUN apk add --no-cache git
 WORKDIR /build/code
 
