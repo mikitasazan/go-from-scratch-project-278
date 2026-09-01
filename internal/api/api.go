@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
+	"github.com/go-playground/validator/v10"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -86,9 +89,63 @@ type visitResponse struct {
 	Status int32  `json:"status"`
 }
 
-type linkRequest struct {
+// createLinkPayload is the body of a create or update request. The type name
+// shows up in the validator's own messages, which the step's example quotes.
+type createLinkPayload struct {
 	OriginalURL string `json:"original_url" binding:"required,url"`
-	ShortName   string `json:"short_name"`
+	ShortName   string `json:"short_name" binding:"omitempty,min=3,max=32"`
+}
+
+// init makes the validator name a field by its JSON tag, so an error is keyed
+// by `original_url` rather than by the Go field name.
+func init() {
+	v, ok := binding.Validator.Engine().(*validator.Validate)
+	if !ok {
+		return
+	}
+
+	v.RegisterTagNameFunc(func(field reflect.StructField) string {
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name == "-" {
+			return ""
+		}
+
+		return name
+	})
+}
+
+// bindPayload reads and validates a request body, answering itself with the
+// API's single error shape: 400 for a body that is not valid JSON at all, 422
+// for one whose fields do not pass validation.
+func bindPayload(c *gin.Context, payload *createLinkPayload) bool {
+	err := c.ShouldBindJSON(payload)
+	if err == nil {
+		return true
+	}
+
+	var validationErrs validator.ValidationErrors
+	if errors.As(err, &validationErrs) {
+		fields := make(map[string]string, len(validationErrs))
+		for _, fieldErr := range validationErrs {
+			fields[fieldErr.Field()] = fieldErr.Error()
+		}
+
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"errors": fields})
+
+		return false
+	}
+
+	c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+
+	return false
+}
+
+// abortShortNameTaken answers a uniqueness conflict in the same shape as a
+// validation failure, since from the caller's side it is one.
+func abortShortNameTaken(c *gin.Context) {
+	c.JSON(http.StatusUnprocessableEntity, gin.H{
+		"errors": gin.H{"short_name": "short name already in use"},
+	})
 }
 
 // Register wires the API routes onto the router.
@@ -292,16 +349,15 @@ func (h *Handler) get(c *gin.Context) {
 }
 
 func (h *Handler) create(c *gin.Context) {
-	var req linkRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+	var req createLinkPayload
+	if !bindPayload(c, &req) {
 		return
 	}
 
 	link, err := h.createLink(c.Request.Context(), req)
 	if err != nil {
 		if errors.Is(err, ErrShortNameTaken) {
-			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			abortShortNameTaken(c)
 			return
 		}
 
@@ -315,7 +371,7 @@ func (h *Handler) create(c *gin.Context) {
 
 // createLink inserts a link, generating a short name when none was given and
 // retrying a generated one that happens to collide.
-func (h *Handler) createLink(ctx context.Context, req linkRequest) (store.Link, error) {
+func (h *Handler) createLink(ctx context.Context, req createLinkPayload) (store.Link, error) {
 	if req.ShortName != "" {
 		link, err := h.store.CreateLink(ctx, store.CreateLinkParams{
 			OriginalUrl: req.OriginalURL,
@@ -360,9 +416,8 @@ func (h *Handler) update(c *gin.Context) {
 		return
 	}
 
-	var req linkRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+	var req createLinkPayload
+	if !bindPayload(c, &req) {
 		return
 	}
 
@@ -384,7 +439,7 @@ func (h *Handler) update(c *gin.Context) {
 	})
 
 	if isUniqueViolation(err) {
-		c.JSON(http.StatusConflict, gin.H{"error": ErrShortNameTaken.Error()})
+		abortShortNameTaken(c)
 		return
 	}
 

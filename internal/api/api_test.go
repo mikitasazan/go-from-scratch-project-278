@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -263,8 +264,17 @@ func TestCreateLinkRejectsTakenShortName(t *testing.T) {
 	do(t, router, http.MethodPost, "/api/links", body)
 
 	recorder := do(t, router, http.MethodPost, "/api/links", body)
-	if recorder.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusConflict)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnprocessableEntity)
+	}
+
+	var got struct {
+		Errors map[string]string `json:"errors"`
+	}
+	decode(t, recorder, &got)
+
+	if got.Errors["short_name"] != "short name already in use" {
+		t.Fatalf("errors = %v", got.Errors)
 	}
 }
 
@@ -272,9 +282,9 @@ func TestListLinks(t *testing.T) {
 	router := newTestRouter(newFakeStore())
 
 	do(t, router, http.MethodPost, "/api/links",
-		`{"original_url":"https://example.com/one","short_name":"one"}`)
+		`{"original_url":"https://example.com/one","short_name":"one1"}`)
 	do(t, router, http.MethodPost, "/api/links",
-		`{"original_url":"https://example.com/two","short_name":"two"}`)
+		`{"original_url":"https://example.com/two","short_name":"two2"}`)
 
 	recorder := do(t, router, http.MethodGet, "/api/links", "")
 	if recorder.Code != http.StatusOK {
@@ -303,7 +313,7 @@ func TestGetLink(t *testing.T) {
 	router := newTestRouter(newFakeStore())
 
 	do(t, router, http.MethodPost, "/api/links",
-		`{"original_url":"https://example.com/one","short_name":"one"}`)
+		`{"original_url":"https://example.com/one","short_name":"one1"}`)
 
 	recorder := do(t, router, http.MethodGet, "/api/links/1", "")
 	if recorder.Code != http.StatusOK {
@@ -340,7 +350,7 @@ func TestUpdateLink(t *testing.T) {
 	router := newTestRouter(newFakeStore())
 
 	do(t, router, http.MethodPost, "/api/links",
-		`{"original_url":"https://example.com/one","short_name":"one"}`)
+		`{"original_url":"https://example.com/one","short_name":"one1"}`)
 
 	recorder := do(t, router, http.MethodPut, "/api/links/1",
 		`{"original_url":"https://example.com/changed","short_name":"changed"}`)
@@ -372,15 +382,15 @@ func TestUpdateRejectsTakenShortName(t *testing.T) {
 	router := newTestRouter(newFakeStore())
 
 	do(t, router, http.MethodPost, "/api/links",
-		`{"original_url":"https://example.com/one","short_name":"one"}`)
+		`{"original_url":"https://example.com/one","short_name":"one1"}`)
 	do(t, router, http.MethodPost, "/api/links",
-		`{"original_url":"https://example.com/two","short_name":"two"}`)
+		`{"original_url":"https://example.com/two","short_name":"two2"}`)
 
 	recorder := do(t, router, http.MethodPut, "/api/links/2",
-		`{"original_url":"https://example.com/two","short_name":"one"}`)
+		`{"original_url":"https://example.com/two","short_name":"one1"}`)
 
-	if recorder.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusConflict)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnprocessableEntity)
 	}
 }
 
@@ -388,7 +398,7 @@ func TestDeleteLink(t *testing.T) {
 	router := newTestRouter(newFakeStore())
 
 	do(t, router, http.MethodPost, "/api/links",
-		`{"original_url":"https://example.com/one","short_name":"one"}`)
+		`{"original_url":"https://example.com/one","short_name":"one1"}`)
 
 	recorder := do(t, router, http.MethodDelete, "/api/links/1", "")
 	if recorder.Code != http.StatusNoContent {
@@ -510,9 +520,9 @@ func TestRedirectSendsVisitorToOriginalURL(t *testing.T) {
 	router := newTestRouter(fake)
 
 	do(t, router, http.MethodPost, "/api/links",
-		`{"original_url":"https://example.com/target","short_name":"go"}`)
+		`{"original_url":"https://example.com/target","short_name":"goto"}`)
 
-	recorder := do(t, router, http.MethodGet, "/r/go", "")
+	recorder := do(t, router, http.MethodGet, "/r/goto", "")
 
 	if recorder.Code != http.StatusFound {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusFound)
@@ -528,9 +538,9 @@ func TestRedirectRecordsTheVisit(t *testing.T) {
 	router := newTestRouter(fake)
 
 	do(t, router, http.MethodPost, "/api/links",
-		`{"original_url":"https://example.com/target","short_name":"go"}`)
+		`{"original_url":"https://example.com/target","short_name":"goto"}`)
 
-	request := httptest.NewRequest(http.MethodGet, "/r/go", nil)
+	request := httptest.NewRequest(http.MethodGet, "/r/goto", nil)
 	request.Header.Set("User-Agent", "curl/8.5.0")
 	request.Header.Set("Referer", "https://news.example.com/post")
 	router.ServeHTTP(httptest.NewRecorder(), request)
@@ -568,10 +578,10 @@ func TestListVisits(t *testing.T) {
 	router := newTestRouter(fake)
 
 	do(t, router, http.MethodPost, "/api/links",
-		`{"original_url":"https://example.com/target","short_name":"go"}`)
+		`{"original_url":"https://example.com/target","short_name":"goto"}`)
 
 	for range 3 {
-		do(t, router, http.MethodGet, "/r/go", "")
+		do(t, router, http.MethodGet, "/r/goto", "")
 	}
 
 	recorder := do(t, router, http.MethodGet, "/api/link_visits", "")
@@ -600,10 +610,10 @@ func TestListVisitsPaginates(t *testing.T) {
 	router := newTestRouter(fake)
 
 	do(t, router, http.MethodPost, "/api/links",
-		`{"original_url":"https://example.com/target","short_name":"go"}`)
+		`{"original_url":"https://example.com/target","short_name":"goto"}`)
 
 	for range 7 {
-		do(t, router, http.MethodGet, "/r/go", "")
+		do(t, router, http.MethodGet, "/r/goto", "")
 	}
 
 	recorder := do(t, router, http.MethodGet, "/api/link_visits?range=[2,4]", "")
@@ -621,5 +631,97 @@ func TestListVisitsPaginates(t *testing.T) {
 
 	if header := recorder.Header().Get("Content-Range"); header != "link_visits 2-4/7" {
 		t.Fatalf("Content-Range = %q, want %q", header, "link_visits 2-4/7")
+	}
+}
+
+func TestCreateLinkReportsTheInvalidField(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+
+	recorder := do(t, router, http.MethodPost, "/api/links", `{"original_url":"not-a-url"}`)
+
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnprocessableEntity)
+	}
+
+	var got struct {
+		Errors map[string]string `json:"errors"`
+	}
+	decode(t, recorder, &got)
+
+	if _, ok := got.Errors["original_url"]; !ok {
+		t.Fatalf("errors = %v, want a key for original_url", got.Errors)
+	}
+}
+
+func TestCreateLinkRejectsMissingURL(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+
+	recorder := do(t, router, http.MethodPost, "/api/links", `{"short_name":"exmpl"}`)
+
+	var got struct {
+		Errors map[string]string `json:"errors"`
+	}
+	decode(t, recorder, &got)
+
+	if recorder.Code != http.StatusUnprocessableEntity || got.Errors["original_url"] == "" {
+		t.Fatalf("status = %d, errors = %v", recorder.Code, got.Errors)
+	}
+}
+
+func TestCreateLinkRejectsTooShortName(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+
+	recorder := do(t, router, http.MethodPost, "/api/links",
+		`{"original_url":"https://example.com/x","short_name":"ab"}`)
+
+	var got struct {
+		Errors map[string]string `json:"errors"`
+	}
+	decode(t, recorder, &got)
+
+	if recorder.Code != http.StatusUnprocessableEntity || got.Errors["short_name"] == "" {
+		t.Fatalf("status = %d, errors = %v", recorder.Code, got.Errors)
+	}
+}
+
+func TestCreateLinkRejectsTooLongName(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+
+	long := strings.Repeat("a", 33)
+	recorder := do(t, router, http.MethodPost, "/api/links",
+		fmt.Sprintf(`{"original_url":"https://example.com/x","short_name":"%s"}`, long))
+
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestBrokenJSONIsBadRequest(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+
+	recorder := do(t, router, http.MethodPost, "/api/links", `{"original_url":`)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+
+	var got map[string]string
+	decode(t, recorder, &got)
+
+	if got["error"] != "invalid request" {
+		t.Fatalf("body = %v", got)
+	}
+}
+
+func TestUpdateRejectsInvalidURL(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+
+	do(t, router, http.MethodPost, "/api/links",
+		`{"original_url":"https://example.com/one","short_name":"one1"}`)
+
+	recorder := do(t, router, http.MethodPut, "/api/links/1", `{"original_url":"nope"}`)
+
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnprocessableEntity)
 	}
 }
