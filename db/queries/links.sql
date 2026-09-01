@@ -19,9 +19,12 @@ VALUES ($1, $2)
 RETURNING id, original_url, short_name, created_at;
 
 -- name: UpdateLink :one
+-- An empty short_name means "keep the one already stored", resolved inside the
+-- statement so a concurrent rename cannot be silently rolled back.
 UPDATE links
-SET original_url = $2, short_name = $3
-WHERE id = $1
+SET original_url = sqlc.arg(original_url),
+    short_name = COALESCE(NULLIF(sqlc.arg(short_name)::text, ''), short_name)
+WHERE id = sqlc.arg(id)
 RETURNING id, original_url, short_name, created_at;
 
 -- name: DeleteLink :execrows

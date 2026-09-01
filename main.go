@@ -46,9 +46,14 @@ func initSentry() bool {
 func newRouter(withSentry bool, handler *api.Handler, allowedOrigins []string) *gin.Engine {
 	router := gin.New()
 
-	// Render sits behind Cloudflare, so the client IP comes from its header;
-	// without this the recorded visit would carry the proxy's address.
-	router.TrustedPlatform = gin.PlatformCloudflare
+	// Behind Cloudflare (which is what Render puts in front of a service) the
+	// client address arrives in CF-Connecting-IP. Gin trusts that header without
+	// checking who sent it, so switching it on anywhere else would let a caller
+	// write any address it likes into the visit log — hence the env switch,
+	// off by default for a service that is not behind Cloudflare.
+	if os.Getenv("TRUST_CLOUDFLARE") == "true" {
+		router.TrustedPlatform = gin.PlatformCloudflare
+	}
 
 	router.Use(gin.Logger(), gin.Recovery())
 

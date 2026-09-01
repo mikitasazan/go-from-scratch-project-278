@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +37,10 @@ const (
 
 // ErrShortNameTaken is returned when the requested short name already exists.
 var ErrShortNameTaken = errors.New("short name is already taken")
+
+// shortNamePattern is the set a short name may use: it becomes a single path
+// segment, so a slash or a space would break the link it names.
+var shortNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // LinkStore is the slice of the generated queries the HTTP layer needs. Keeping
 // it an interface lets the handlers be tested without a database.
@@ -93,7 +98,7 @@ type visitResponse struct {
 // shows up in the validator's own messages, which the step's example quotes.
 type createLinkPayload struct {
 	OriginalURL string `json:"original_url" binding:"required,url"`
-	ShortName   string `json:"short_name" binding:"omitempty,min=3,max=32"`
+	ShortName   string `json:"short_name" binding:"omitempty,min=3,max=32,shortname"`
 }
 
 // init makes the validator name a field by its JSON tag, so an error is keyed
@@ -103,6 +108,12 @@ func init() {
 	if !ok {
 		return
 	}
+
+	// A short name goes straight into a URL path, so anything outside this set
+	// would produce a short_url that /r/:code cannot match back.
+	_ = v.RegisterValidation("shortname", func(fl validator.FieldLevel) bool {
+		return shortNamePattern.MatchString(fl.Field().String())
+	})
 
 	v.RegisterTagNameFunc(func(field reflect.StructField) string {
 		name := strings.Split(field.Tag.Get("json"), ",")[0]
@@ -204,6 +215,23 @@ type window struct {
 	limited    bool
 }
 
+// bounds turns the requested window into a limit and an offset that are safe to
+// hand to the database. A range far past the end of the collection asks for
+// nothing rather than wrapping around: the driver takes int32, and an unclamped
+// int64 silently becomes a negative limit.
+func (w window) bounds(total int64) (limit, offset int32) {
+	if w.start >= total {
+		return 0, 0
+	}
+
+	last := min(w.end, total-1)
+	if last < w.start {
+		return 0, 0
+	}
+
+	return int32(last - w.start + 1), int32(w.start)
+}
+
 // resolveWindow reads ?range and turns it into a window over a collection of
 // the given size. It answers 422 itself when the parameter is malformed.
 func resolveWindow(c *gin.Context, total int64) (window, bool) {
@@ -214,17 +242,29 @@ func resolveWindow(c *gin.Context, total int64) (window, bool) {
 
 	start, end, ok := parseRange(raw)
 	if !ok {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "range must look like [0,9]"})
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"errors": gin.H{"range": "range must look like [0,9]"},
+		})
+
 		return window{}, false
 	}
 
 	return window{start: start, end: end, limited: true}, true
 }
 
-func (h *Handler) list(c *gin.Context) {
+// listCollection is the shape every list endpoint here has: count the rows,
+// work out the window, fetch it, and say in the header what was served.
+func listCollection[T any, R any](
+	c *gin.Context,
+	name string,
+	count func(context.Context) (int64, error),
+	all func(context.Context) ([]T, error),
+	page func(context.Context, int32, int32) ([]T, error),
+	convert func(T) R,
+) {
 	ctx := c.Request.Context()
 
-	total, err := h.store.CountLinks(ctx)
+	total, err := count(ctx)
 	if err != nil {
 		abortInternal(c, err)
 		return
@@ -235,15 +275,17 @@ func (h *Handler) list(c *gin.Context) {
 		return
 	}
 
-	var links []store.Link
+	var rows []T
 
 	if win.limited {
-		links, err = h.store.ListLinksRange(ctx, store.ListLinksRangeParams{
-			Limit:  int32(win.end - win.start + 1),
-			Offset: int32(win.start),
-		})
+		limit, offset := win.bounds(total)
+		if limit == 0 {
+			rows = nil
+		} else {
+			rows, err = page(ctx, limit, offset)
+		}
 	} else {
-		links, err = h.store.ListLinks(ctx)
+		rows, err = all(ctx)
 	}
 
 	if err != nil {
@@ -251,61 +293,48 @@ func (h *Handler) list(c *gin.Context) {
 		return
 	}
 
-	out := make([]linkResponse, 0, len(links))
-	for _, link := range links {
-		out = append(out, h.response(link))
+	out := make([]R, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, convert(row))
 	}
 
-	c.Header("Content-Range", fmt.Sprintf("links %d-%d/%d", win.start, win.end, total))
+	c.Header("Content-Range", fmt.Sprintf("%s %d-%d/%d", name, win.start, win.end, total))
 	c.JSON(http.StatusOK, out)
 }
 
+func (h *Handler) list(c *gin.Context) {
+	listCollection(c, "links",
+		h.store.CountLinks,
+		h.store.ListLinks,
+		func(ctx context.Context, limit, offset int32) ([]store.Link, error) {
+			return h.store.ListLinksRange(ctx, store.ListLinksRangeParams{Limit: limit, Offset: offset})
+		},
+		h.response,
+	)
+}
+
 func (h *Handler) listVisits(c *gin.Context) {
-	ctx := c.Request.Context()
+	listCollection(c, "link_visits",
+		h.store.CountLinkVisits,
+		h.store.ListLinkVisits,
+		func(ctx context.Context, limit, offset int32) ([]store.LinkVisit, error) {
+			return h.store.ListLinkVisitsRange(ctx, store.ListLinkVisitsRangeParams{Limit: limit, Offset: offset})
+		},
+		visitFrom,
+	)
+}
 
-	total, err := h.store.CountLinkVisits(ctx)
-	if err != nil {
-		abortInternal(c, err)
-		return
+func visitFrom(visit store.LinkVisit) visitResponse {
+	return visitResponse{
+		ID:        visit.ID,
+		LinkID:    visit.LinkID,
+		CreatedAt: visit.CreatedAt.Time.UTC().Format(time.RFC3339),
+		IP:        visit.Ip,
+		UserAgent: visit.UserAgent,
+		Referer:   visit.Referer,
+		Reffer:    visit.Referer,
+		Status:    visit.Status,
 	}
-
-	win, ok := resolveWindow(c, total)
-	if !ok {
-		return
-	}
-
-	var visits []store.LinkVisit
-
-	if win.limited {
-		visits, err = h.store.ListLinkVisitsRange(ctx, store.ListLinkVisitsRangeParams{
-			Limit:  int32(win.end - win.start + 1),
-			Offset: int32(win.start),
-		})
-	} else {
-		visits, err = h.store.ListLinkVisits(ctx)
-	}
-
-	if err != nil {
-		abortInternal(c, err)
-		return
-	}
-
-	out := make([]visitResponse, 0, len(visits))
-	for _, visit := range visits {
-		out = append(out, visitResponse{
-			ID:        visit.ID,
-			LinkID:    visit.LinkID,
-			CreatedAt: visit.CreatedAt.Time.UTC().Format(time.RFC3339),
-			IP:        visit.Ip,
-			UserAgent: visit.UserAgent,
-			Referer:   visit.Referer,
-			Reffer:    visit.Referer,
-			Status:    visit.Status,
-		})
-	}
-
-	c.Header("Content-Range", fmt.Sprintf("link_visits %d-%d/%d", win.start, win.end, total))
-	c.JSON(http.StatusOK, out)
 }
 
 // redirect sends the visitor to the original address and records the visit.
@@ -407,7 +436,11 @@ func (h *Handler) createLink(ctx context.Context, req createLinkPayload) (store.
 		lastErr = err
 	}
 
-	return store.Link{}, lastErr
+	if lastErr != nil {
+		return store.Link{}, ErrShortNameTaken
+	}
+
+	return store.Link{}, nil
 }
 
 func (h *Handler) update(c *gin.Context) {
@@ -421,21 +454,10 @@ func (h *Handler) update(c *gin.Context) {
 		return
 	}
 
-	shortName := req.ShortName
-	if shortName == "" {
-		current, err := h.store.GetLink(c.Request.Context(), id)
-		if err != nil {
-			abortStoreError(c, err)
-			return
-		}
-
-		shortName = current.ShortName
-	}
-
 	link, err := h.store.UpdateLink(c.Request.Context(), store.UpdateLinkParams{
 		ID:          id,
 		OriginalUrl: req.OriginalURL,
-		ShortName:   shortName,
+		ShortName:   req.ShortName,
 	})
 
 	if isUniqueViolation(err) {
@@ -504,15 +526,31 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == uniqueViolation
 }
 
+// generateShortName draws letters uniformly. Taking a byte modulo 62 would
+// make the first eight letters of the alphabet about a quarter more likely, so
+// bytes that fall outside the last whole multiple of 62 are drawn again.
 func generateShortName() (string, error) {
+	const limit = 256 - 256%len(shortNameAlphabet)
+
+	name := make([]byte, 0, shortNameLength)
 	buf := make([]byte, shortNameLength)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
+
+	for len(name) < shortNameLength {
+		if _, err := rand.Read(buf); err != nil {
+			return "", err
+		}
+
+		for _, b := range buf {
+			if int(b) >= limit {
+				continue
+			}
+
+			name = append(name, shortNameAlphabet[int(b)%len(shortNameAlphabet)])
+			if len(name) == shortNameLength {
+				break
+			}
+		}
 	}
 
-	for i, b := range buf {
-		buf[i] = shortNameAlphabet[int(b)%len(shortNameAlphabet)]
-	}
-
-	return string(buf), nil
+	return string(name), nil
 }

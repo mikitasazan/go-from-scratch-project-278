@@ -146,15 +146,22 @@ func (f *fakeStore) CreateLink(_ context.Context, arg store.CreateLinkParams) (s
 }
 
 func (f *fakeStore) UpdateLink(_ context.Context, arg store.UpdateLinkParams) (store.Link, error) {
-	if _, ok := f.links[arg.ID]; !ok {
+	current, ok := f.links[arg.ID]
+	if !ok {
 		return store.Link{}, pgx.ErrNoRows
 	}
 
-	if f.taken(arg.ShortName, arg.ID) {
+	// Mirrors the statement itself: an empty name keeps the stored one.
+	name := arg.ShortName
+	if name == "" {
+		name = current.ShortName
+	}
+
+	if f.taken(name, arg.ID) {
 		return store.Link{}, duplicateErr()
 	}
 
-	link := store.Link{ID: arg.ID, OriginalUrl: arg.OriginalUrl, ShortName: arg.ShortName}
+	link := store.Link{ID: arg.ID, OriginalUrl: arg.OriginalUrl, ShortName: name}
 	f.links[arg.ID] = link
 
 	return link, nil
@@ -723,5 +730,80 @@ func TestUpdateRejectsInvalidURL(t *testing.T) {
 
 	if recorder.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestUpdateWithoutShortNameKeepsTheStoredOne(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+
+	do(t, router, http.MethodPost, "/api/links",
+		`{"original_url":"https://example.com/one","short_name":"one1"}`)
+
+	recorder := do(t, router, http.MethodPut, "/api/links/1",
+		`{"original_url":"https://example.com/changed"}`)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", recorder.Code, http.StatusOK, recorder.Body)
+	}
+
+	var got map[string]any
+	decode(t, recorder, &got)
+
+	if got["short_name"] != "one1" || got["original_url"] != "https://example.com/changed" {
+		t.Fatalf("link = %v", got)
+	}
+}
+
+func TestCreateLinkRejectsAShortNameThatWouldBreakItsURL(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+
+	for _, name := range []string{"a/b", "with space", "коротко"} {
+		body := fmt.Sprintf(`{"original_url":"https://example.com/x","short_name":%q}`, name)
+
+		recorder := do(t, router, http.MethodPost, "/api/links", body)
+		if recorder.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("short_name %q: status = %d, want %d", name, recorder.Code, http.StatusUnprocessableEntity)
+		}
+	}
+}
+
+func TestListLinksWithAHugeRangeDoesNotWrapAround(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+	seed(t, router, 3)
+
+	for _, r := range []string{"[0,3000000000]", "[0,4294967296]", "[4294967296,4294967297]"} {
+		recorder := do(t, router, http.MethodGet, "/api/links?range="+r, "")
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("range %s: status = %d, want %d (%s)", r, recorder.Code, http.StatusOK, recorder.Body)
+		}
+
+		var got []map[string]any
+		decode(t, recorder, &got)
+
+		switch r {
+		case "[4294967296,4294967297]":
+			if len(got) != 0 {
+				t.Fatalf("range %s returned %d links, want none", r, len(got))
+			}
+		default:
+			if len(got) != 3 {
+				t.Fatalf("range %s returned %d links, want all 3", r, len(got))
+			}
+		}
+	}
+}
+
+func TestListLinksRejectsARangeWithTheDocumentedShape(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+
+	recorder := do(t, router, http.MethodGet, "/api/links?range=broken", "")
+
+	var got struct {
+		Errors map[string]string `json:"errors"`
+	}
+	decode(t, recorder, &got)
+
+	if recorder.Code != http.StatusUnprocessableEntity || got.Errors["range"] == "" {
+		t.Fatalf("status = %d, errors = %v", recorder.Code, got.Errors)
 	}
 }

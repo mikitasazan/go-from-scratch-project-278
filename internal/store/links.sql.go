@@ -282,19 +282,22 @@ func (q *Queries) ListLinksRange(ctx context.Context, arg ListLinksRangeParams) 
 
 const updateLink = `-- name: UpdateLink :one
 UPDATE links
-SET original_url = $2, short_name = $3
-WHERE id = $1
+SET original_url = $1,
+    short_name = COALESCE(NULLIF($2::text, ''), short_name)
+WHERE id = $3
 RETURNING id, original_url, short_name, created_at
 `
 
 type UpdateLinkParams struct {
-	ID          int64  `json:"id"`
 	OriginalUrl string `json:"original_url"`
 	ShortName   string `json:"short_name"`
+	ID          int64  `json:"id"`
 }
 
+// An empty short_name means "keep the one already stored", resolved inside the
+// statement so a concurrent rename cannot be silently rolled back.
 func (q *Queries) UpdateLink(ctx context.Context, arg UpdateLinkParams) (Link, error) {
-	row := q.db.QueryRow(ctx, updateLink, arg.ID, arg.OriginalUrl, arg.ShortName)
+	row := q.db.QueryRow(ctx, updateLink, arg.OriginalUrl, arg.ShortName, arg.ID)
 	var i Link
 	err := row.Scan(
 		&i.ID,
