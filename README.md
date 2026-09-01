@@ -1,6 +1,7 @@
 # Сокращатель ссылок (Go)
 
 [![hexlet-check](https://github.com/mikitasazan/go-from-scratch-project-278/actions/workflows/hexlet-check.yml/badge.svg)](https://github.com/mikitasazan/go-from-scratch-project-278/actions)
+[![checks](https://github.com/mikitasazan/go-from-scratch-project-278/actions/workflows/checks.yml/badge.svg)](https://github.com/mikitasazan/go-from-scratch-project-278/actions/workflows/checks.yml)
 
 Спроектируйте приложение для удобных ссылок
 
