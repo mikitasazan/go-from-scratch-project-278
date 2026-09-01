@@ -19,7 +19,7 @@
 
 ## Стек
 
-- Go 1.27, [Gin](https://gin-gonic.com/) — HTTP-слой и валидация
+- Go 1.26, [Gin](https://gin-gonic.com/) — HTTP-слой и валидация
   ([go-playground/validator](https://github.com/go-playground/validator))
 - PostgreSQL, [pgx](https://github.com/jackc/pgx) — драйвер,
   [sqlc](https://sqlc.dev/) — запросы генерируются из SQL,
