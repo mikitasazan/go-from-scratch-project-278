@@ -30,7 +30,7 @@ func TestQueriesAgainstPostgres(t *testing.T) {
 
 	defer pool.Close()
 
-	if _, err := pool.Exec(ctx, "TRUNCATE links RESTART IDENTITY"); err != nil {
+	if _, err := pool.Exec(ctx, "TRUNCATE links, link_visits RESTART IDENTITY"); err != nil {
 		t.Fatalf("cannot clean the table: %v", err)
 	}
 
@@ -72,6 +72,22 @@ func TestQueriesAgainstPostgres(t *testing.T) {
 		t.Fatalf("ListLinks: %v, %d rows", err, len(links))
 	}
 
+	visit, err := queries.CreateLinkVisit(ctx, store.CreateLinkVisitParams{
+		LinkID:    created.ID,
+		Ip:        "203.0.113.7",
+		UserAgent: "curl/8.5.0",
+		Referer:   "https://news.example.com/post",
+		Status:    302,
+	})
+	if err != nil || visit.CreatedAt.Time.IsZero() {
+		t.Fatalf("CreateLinkVisit: %v, %+v", err, visit)
+	}
+
+	visits, err := queries.ListLinkVisitsRange(ctx, store.ListLinkVisitsRangeParams{Limit: 10, Offset: 0})
+	if err != nil || len(visits) != 1 {
+		t.Fatalf("ListLinkVisitsRange: %v, %d rows", err, len(visits))
+	}
+
 	affected, err := queries.DeleteLink(ctx, created.ID)
 	if err != nil || affected != 1 {
 		t.Fatalf("DeleteLink: %v, %d rows", err, affected)
@@ -79,5 +95,12 @@ func TestQueriesAgainstPostgres(t *testing.T) {
 
 	if _, err := queries.GetLink(ctx, created.ID); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("GetLink after delete = %v, want pgx.ErrNoRows", err)
+	}
+
+	// The visit rows hang off the link by a cascading foreign key, so deleting
+	// the link must take its visits with it.
+	left, err := queries.CountLinkVisits(ctx)
+	if err != nil || left != 0 {
+		t.Fatalf("CountLinkVisits after delete = %d (%v), want 0", left, err)
 	}
 }
