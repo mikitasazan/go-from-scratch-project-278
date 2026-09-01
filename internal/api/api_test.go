@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -47,6 +48,27 @@ func (f *fakeStore) ListLinks(_ context.Context) ([]store.Link, error) {
 	}
 
 	return out, nil
+}
+
+func (f *fakeStore) ListLinksRange(ctx context.Context, arg store.ListLinksRangeParams) ([]store.Link, error) {
+	all, err := f.ListLinks(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	from := min(int(arg.Offset), len(all))
+	to := min(from+int(arg.Limit), len(all))
+
+	return all[from:to], nil
+}
+
+func (f *fakeStore) CountLinks(ctx context.Context) (int64, error) {
+	all, err := f.ListLinks(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	return int64(len(all)), nil
 }
 
 func (f *fakeStore) GetLink(_ context.Context, id int64) (store.Link, error) {
@@ -356,5 +378,97 @@ func TestDeleteMissingLinkIsNotFound(t *testing.T) {
 	recorder := do(t, router, http.MethodDelete, "/api/links/404", "")
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+}
+
+func seed(t *testing.T, router *gin.Engine, count int) {
+	t.Helper()
+
+	for i := 1; i <= count; i++ {
+		body := fmt.Sprintf(`{"original_url":"https://example.com/%d","short_name":"name%d"}`, i, i)
+		if recorder := do(t, router, http.MethodPost, "/api/links", body); recorder.Code != http.StatusCreated {
+			t.Fatalf("seeding failed at %d: %d", i, recorder.Code)
+		}
+	}
+}
+
+func TestListLinksFirstPage(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+	seed(t, router, 12)
+
+	recorder := do(t, router, http.MethodGet, "/api/links?range=[0,10]", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	var got []map[string]any
+	decode(t, recorder, &got)
+
+	if len(got) != 10 {
+		t.Fatalf("got %d links, want 10", len(got))
+	}
+
+	if got[0]["short_name"] != "name1" || got[9]["short_name"] != "name10" {
+		t.Fatalf("wrong page: %v .. %v", got[0]["short_name"], got[9]["short_name"])
+	}
+
+	if header := recorder.Header().Get("Content-Range"); header != "links 0-10/12" {
+		t.Fatalf("Content-Range = %q, want %q", header, "links 0-10/12")
+	}
+}
+
+func TestListLinksSecondPage(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+	seed(t, router, 11)
+
+	recorder := do(t, router, http.MethodGet, "/api/links?range=%5B5,%2010%5D", "")
+
+	var got []map[string]any
+	decode(t, recorder, &got)
+
+	if len(got) != 5 {
+		t.Fatalf("got %d links, want 5", len(got))
+	}
+
+	if got[0]["short_name"] != "name6" || got[4]["short_name"] != "name10" {
+		t.Fatalf("wrong page: %v .. %v", got[0]["short_name"], got[4]["short_name"])
+	}
+
+	if header := recorder.Header().Get("Content-Range"); header != "links 5-10/11" {
+		t.Fatalf("Content-Range = %q, want %q", header, "links 5-10/11")
+	}
+}
+
+func TestListLinksRangePastTheEnd(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+	seed(t, router, 3)
+
+	recorder := do(t, router, http.MethodGet, "/api/links?range=[10,20]", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	if body := recorder.Body.String(); body != "[]" {
+		t.Fatalf("body = %s, want []", body)
+	}
+}
+
+func TestListLinksWithoutRangeReportsWholeCollection(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+	seed(t, router, 3)
+
+	recorder := do(t, router, http.MethodGet, "/api/links", "")
+
+	if header := recorder.Header().Get("Content-Range"); header != "links 0-3/3" {
+		t.Fatalf("Content-Range = %q, want %q", header, "links 0-3/3")
+	}
+}
+
+func TestListLinksRejectsBrokenRange(t *testing.T) {
+	router := newTestRouter(newFakeStore())
+
+	recorder := do(t, router, http.MethodGet, "/api/links?range=broken", "")
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnprocessableEntity)
 	}
 }

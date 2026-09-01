@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,6 +34,8 @@ var ErrShortNameTaken = errors.New("short name is already taken")
 // it an interface lets the handlers be tested without a database.
 type LinkStore interface {
 	ListLinks(ctx context.Context) ([]store.Link, error)
+	ListLinksRange(ctx context.Context, arg store.ListLinksRangeParams) ([]store.Link, error)
+	CountLinks(ctx context.Context) (int64, error)
 	GetLink(ctx context.Context, id int64) (store.Link, error)
 	GetLinkByShortName(ctx context.Context, shortName string) (store.Link, error)
 	CreateLink(ctx context.Context, arg store.CreateLinkParams) (store.Link, error)
@@ -84,8 +87,61 @@ func (h *Handler) response(link store.Link) linkResponse {
 	}
 }
 
+// parseRange reads the ?range=[start,end] parameter used for pagination. The
+// bounds are item positions, end excluded: [0,10] is the first ten links.
+// A missing parameter means "the whole collection".
+func parseRange(raw string) (start, end int64, ok bool) {
+	trimmed := strings.TrimSpace(raw)
+	trimmed = strings.TrimPrefix(trimmed, "[")
+	trimmed = strings.TrimSuffix(trimmed, "]")
+
+	parts := strings.Split(trimmed, ",")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+
+	start, err := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
+	if err != nil || start < 0 {
+		return 0, 0, false
+	}
+
+	end, err = strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+	if err != nil || end < start {
+		return 0, 0, false
+	}
+
+	return start, end, true
+}
+
 func (h *Handler) list(c *gin.Context) {
-	links, err := h.store.ListLinks(c.Request.Context())
+	ctx := c.Request.Context()
+
+	total, err := h.store.CountLinks(ctx)
+	if err != nil {
+		abortInternal(c, err)
+		return
+	}
+
+	raw, hasRange := c.GetQuery("range")
+
+	start, end, ok := parseRange(raw)
+	if hasRange && !ok {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "range must look like [0,10]"})
+		return
+	}
+
+	var links []store.Link
+
+	if ok {
+		links, err = h.store.ListLinksRange(ctx, store.ListLinksRangeParams{
+			Limit:  int32(end - start),
+			Offset: int32(start),
+		})
+	} else {
+		start, end = 0, total
+		links, err = h.store.ListLinks(ctx)
+	}
+
 	if err != nil {
 		abortInternal(c, err)
 		return
@@ -96,6 +152,7 @@ func (h *Handler) list(c *gin.Context) {
 		out = append(out, h.response(link))
 	}
 
+	c.Header("Content-Range", fmt.Sprintf("links %d-%d/%d", start, end, total))
 	c.JSON(http.StatusOK, out)
 }
 
