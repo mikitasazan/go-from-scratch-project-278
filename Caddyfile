@@ -1,0 +1,17 @@
+:80
+
+# Статика из /app/public
+root * /app/public
+
+# Отдаём /assets/* как есть
+handle /assets/* {
+	file_server
+}
+
+# Отдаём корень как index.html
+handle / {
+	file_server
+}
+
+# Всё остальное — в приложение на 8080
+reverse_proxy localhost:8080

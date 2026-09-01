@@ -30,10 +30,10 @@ make run
 curl http://localhost:8080/ping   # pong
 ```
 
-### Локально, в Docker — так же, как на хостинге
+### Локально, в Docker — весь сервис одним контейнером
 
-`Dockerfile` собирает бинарник и goose, а `bin/run.sh` накатывает миграции и
-запускает приложение:
+`Dockerfile` собирает фронтенд, бэкенд и goose, а Caddy внутри контейнера
+раздаёт интерфейс и проксирует запросы в приложение:
 
 ```bash
 docker network create ls-net
@@ -41,11 +41,21 @@ docker run -d --name ls-pg --network ls-net \
   -e POSTGRES_USER=links -e POSTGRES_PASSWORD=secret -e POSTGRES_DB=links \
   postgres:18-alpine
 docker build -t link-shortener:local .
-docker run -d --name ls-app --network ls-net -p 8080:8080 \
-  -e PORT=8080 \
+docker run -d --name ls-app --network ls-net -p 8090:80 \
+  -e PORT=8080 -e BASE_URL=http://localhost:8090 \
   -e DATABASE_URL="postgres://links:secret@ls-pg:5432/links?sslmode=disable" \
   link-shortener:local
-curl http://localhost:8080/ping   # pong
+```
+
+Интерфейс — http://localhost:8090/, API — там же под `/api/links`,
+health-check — `curl http://localhost:8090/ping`.
+
+### Разработка: фронтенд и бэкенд рядом
+
+```bash
+cp .env.example .env      # и поправить DATABASE_URL под свою базу
+npm install
+npm run dev               # бэкенд :8080 и фронтенд :5173 одной командой
 ```
 
 ### Переменные окружения
