@@ -22,13 +22,45 @@ const baseURL = "https://short.test"
 // fakeStore is an in-memory stand-in for the generated queries: enough to drive
 // the handlers without a database, including the unique-name conflict.
 type fakeStore struct {
-	links  map[int64]store.Link
-	nextID int64
-	fail   error
+	links       map[int64]store.Link
+	visits      []store.LinkVisit
+	nextID      int64
+	nextVisitID int64
+	fail        error
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{links: map[int64]store.Link{}, nextID: 1}
+	return &fakeStore{links: map[int64]store.Link{}, nextID: 1, nextVisitID: 1}
+}
+
+func (f *fakeStore) CreateLinkVisit(_ context.Context, arg store.CreateLinkVisitParams) (store.LinkVisit, error) {
+	visit := store.LinkVisit{
+		ID:        f.nextVisitID,
+		LinkID:    arg.LinkID,
+		Ip:        arg.Ip,
+		UserAgent: arg.UserAgent,
+		Referer:   arg.Referer,
+		Status:    arg.Status,
+	}
+	f.visits = append(f.visits, visit)
+	f.nextVisitID++
+
+	return visit, nil
+}
+
+func (f *fakeStore) ListLinkVisits(_ context.Context) ([]store.LinkVisit, error) {
+	return f.visits, nil
+}
+
+func (f *fakeStore) ListLinkVisitsRange(_ context.Context, arg store.ListLinkVisitsRangeParams) ([]store.LinkVisit, error) {
+	from := min(int(arg.Offset), len(f.visits))
+	to := min(from+int(arg.Limit), len(f.visits))
+
+	return f.visits[from:to], nil
+}
+
+func (f *fakeStore) CountLinkVisits(_ context.Context) (int64, error) {
+	return int64(len(f.visits)), nil
 }
 
 func duplicateErr() error {
@@ -470,5 +502,124 @@ func TestListLinksRejectsBrokenRange(t *testing.T) {
 	recorder := do(t, router, http.MethodGet, "/api/links?range=broken", "")
 	if recorder.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestRedirectSendsVisitorToOriginalURL(t *testing.T) {
+	fake := newFakeStore()
+	router := newTestRouter(fake)
+
+	do(t, router, http.MethodPost, "/api/links",
+		`{"original_url":"https://example.com/target","short_name":"go"}`)
+
+	recorder := do(t, router, http.MethodGet, "/r/go", "")
+
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusFound)
+	}
+
+	if location := recorder.Header().Get("Location"); location != "https://example.com/target" {
+		t.Fatalf("Location = %q", location)
+	}
+}
+
+func TestRedirectRecordsTheVisit(t *testing.T) {
+	fake := newFakeStore()
+	router := newTestRouter(fake)
+
+	do(t, router, http.MethodPost, "/api/links",
+		`{"original_url":"https://example.com/target","short_name":"go"}`)
+
+	request := httptest.NewRequest(http.MethodGet, "/r/go", nil)
+	request.Header.Set("User-Agent", "curl/8.5.0")
+	request.Header.Set("Referer", "https://news.example.com/post")
+	router.ServeHTTP(httptest.NewRecorder(), request)
+
+	if len(fake.visits) != 1 {
+		t.Fatalf("recorded %d visits, want 1", len(fake.visits))
+	}
+
+	visit := fake.visits[0]
+	if visit.LinkID != 1 || visit.Status != http.StatusFound {
+		t.Fatalf("visit = %+v", visit)
+	}
+
+	if visit.UserAgent != "curl/8.5.0" || visit.Referer != "https://news.example.com/post" {
+		t.Fatalf("visit did not keep the request headers: %+v", visit)
+	}
+}
+
+func TestRedirectOnUnknownCodeIsNotFound(t *testing.T) {
+	fake := newFakeStore()
+	router := newTestRouter(fake)
+
+	recorder := do(t, router, http.MethodGet, "/r/nothing", "")
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+
+	if len(fake.visits) != 0 {
+		t.Fatalf("a missing link recorded %d visits, want 0", len(fake.visits))
+	}
+}
+
+func TestListVisits(t *testing.T) {
+	fake := newFakeStore()
+	router := newTestRouter(fake)
+
+	do(t, router, http.MethodPost, "/api/links",
+		`{"original_url":"https://example.com/target","short_name":"go"}`)
+
+	for range 3 {
+		do(t, router, http.MethodGet, "/r/go", "")
+	}
+
+	recorder := do(t, router, http.MethodGet, "/api/link_visits", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	var got []map[string]any
+	decode(t, recorder, &got)
+
+	if len(got) != 3 {
+		t.Fatalf("got %d visits, want 3", len(got))
+	}
+
+	if got[0]["status"] != float64(http.StatusFound) {
+		t.Fatalf("status = %v, want 302", got[0]["status"])
+	}
+
+	if header := recorder.Header().Get("Content-Range"); header != "link_visits 0-2/3" {
+		t.Fatalf("Content-Range = %q, want %q", header, "link_visits 0-2/3")
+	}
+}
+
+func TestListVisitsPaginates(t *testing.T) {
+	fake := newFakeStore()
+	router := newTestRouter(fake)
+
+	do(t, router, http.MethodPost, "/api/links",
+		`{"original_url":"https://example.com/target","short_name":"go"}`)
+
+	for range 7 {
+		do(t, router, http.MethodGet, "/r/go", "")
+	}
+
+	recorder := do(t, router, http.MethodGet, "/api/link_visits?range=[2,4]", "")
+
+	var got []map[string]any
+	decode(t, recorder, &got)
+
+	if len(got) != 3 {
+		t.Fatalf("got %d visits, want 3", len(got))
+	}
+
+	if got[0]["id"] != float64(3) {
+		t.Fatalf("first id = %v, want 3", got[0]["id"])
+	}
+
+	if header := recorder.Header().Get("Content-Range"); header != "link_visits 2-4/7" {
+		t.Fatalf("Content-Range = %q, want %q", header, "link_visits 2-4/7")
 	}
 }

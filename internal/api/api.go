@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
@@ -25,6 +26,9 @@ const (
 	// with an existing one. Collisions are rare, so a small cap is enough.
 	generateAttempts = 5
 	uniqueViolation  = "23505"
+	// redirectStatus is the code /r/:code answers with, and the one written
+	// into the visit record.
+	redirectStatus = http.StatusFound
 )
 
 // ErrShortNameTaken is returned when the requested short name already exists.
@@ -41,6 +45,10 @@ type LinkStore interface {
 	CreateLink(ctx context.Context, arg store.CreateLinkParams) (store.Link, error)
 	UpdateLink(ctx context.Context, arg store.UpdateLinkParams) (store.Link, error)
 	DeleteLink(ctx context.Context, id int64) (int64, error)
+	CreateLinkVisit(ctx context.Context, arg store.CreateLinkVisitParams) (store.LinkVisit, error)
+	ListLinkVisits(ctx context.Context) ([]store.LinkVisit, error)
+	ListLinkVisitsRange(ctx context.Context, arg store.ListLinkVisitsRangeParams) ([]store.LinkVisit, error)
+	CountLinkVisits(ctx context.Context) (int64, error)
 }
 
 // Handler serves the link API.
@@ -63,6 +71,21 @@ type linkResponse struct {
 	ShortURL    string `json:"short_url"`
 }
 
+// visitResponse is the JSON shape of one recorded visit.
+type visitResponse struct {
+	ID        int64  `json:"id"`
+	LinkID    int64  `json:"link_id"`
+	CreatedAt string `json:"created_at"`
+	IP        string `json:"ip"`
+	UserAgent string `json:"user_agent"`
+	Referer   string `json:"referer"`
+	// Reffer repeats Referer under the name the supplied frontend actually
+	// reads (its own column is spelled "reffer"), so the interface shows the
+	// value while the field the step text names stays in the response.
+	Reffer string `json:"reffer"`
+	Status int32  `json:"status"`
+}
+
 type linkRequest struct {
 	OriginalURL string `json:"original_url" binding:"required,url"`
 	ShortName   string `json:"short_name"`
@@ -76,6 +99,9 @@ func (h *Handler) Register(router gin.IRouter) {
 	links.GET("/:id", h.get)
 	links.PUT("/:id", h.update)
 	links.DELETE("/:id", h.delete)
+
+	router.GET("/api/link_visits", h.listVisits)
+	router.GET("/r/:code", h.redirect)
 }
 
 func (h *Handler) response(link store.Link) linkResponse {
@@ -115,6 +141,29 @@ func parseRange(raw string) (start, end int64, ok bool) {
 	return start, end, true
 }
 
+// window is the slice of a collection one list request asks for.
+type window struct {
+	start, end int64
+	limited    bool
+}
+
+// resolveWindow reads ?range and turns it into a window over a collection of
+// the given size. It answers 422 itself when the parameter is malformed.
+func resolveWindow(c *gin.Context, total int64) (window, bool) {
+	raw, hasRange := c.GetQuery("range")
+	if !hasRange {
+		return window{start: 0, end: max(total-1, 0)}, true
+	}
+
+	start, end, ok := parseRange(raw)
+	if !ok {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "range must look like [0,9]"})
+		return window{}, false
+	}
+
+	return window{start: start, end: end, limited: true}, true
+}
+
 func (h *Handler) list(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -124,23 +173,19 @@ func (h *Handler) list(c *gin.Context) {
 		return
 	}
 
-	raw, hasRange := c.GetQuery("range")
-
-	start, end, ok := parseRange(raw)
-	if hasRange && !ok {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "range must look like [0,10]"})
+	win, ok := resolveWindow(c, total)
+	if !ok {
 		return
 	}
 
 	var links []store.Link
 
-	if ok {
+	if win.limited {
 		links, err = h.store.ListLinksRange(ctx, store.ListLinksRangeParams{
-			Limit:  int32(end - start + 1),
-			Offset: int32(start),
+			Limit:  int32(win.end - win.start + 1),
+			Offset: int32(win.start),
 		})
 	} else {
-		start, end = 0, max(total-1, 0)
 		links, err = h.store.ListLinks(ctx)
 	}
 
@@ -154,8 +199,81 @@ func (h *Handler) list(c *gin.Context) {
 		out = append(out, h.response(link))
 	}
 
-	c.Header("Content-Range", fmt.Sprintf("links %d-%d/%d", start, end, total))
+	c.Header("Content-Range", fmt.Sprintf("links %d-%d/%d", win.start, win.end, total))
 	c.JSON(http.StatusOK, out)
+}
+
+func (h *Handler) listVisits(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	total, err := h.store.CountLinkVisits(ctx)
+	if err != nil {
+		abortInternal(c, err)
+		return
+	}
+
+	win, ok := resolveWindow(c, total)
+	if !ok {
+		return
+	}
+
+	var visits []store.LinkVisit
+
+	if win.limited {
+		visits, err = h.store.ListLinkVisitsRange(ctx, store.ListLinkVisitsRangeParams{
+			Limit:  int32(win.end - win.start + 1),
+			Offset: int32(win.start),
+		})
+	} else {
+		visits, err = h.store.ListLinkVisits(ctx)
+	}
+
+	if err != nil {
+		abortInternal(c, err)
+		return
+	}
+
+	out := make([]visitResponse, 0, len(visits))
+	for _, visit := range visits {
+		out = append(out, visitResponse{
+			ID:        visit.ID,
+			LinkID:    visit.LinkID,
+			CreatedAt: visit.CreatedAt.Time.UTC().Format(time.RFC3339),
+			IP:        visit.Ip,
+			UserAgent: visit.UserAgent,
+			Referer:   visit.Referer,
+			Reffer:    visit.Referer,
+			Status:    visit.Status,
+		})
+	}
+
+	c.Header("Content-Range", fmt.Sprintf("link_visits %d-%d/%d", win.start, win.end, total))
+	c.JSON(http.StatusOK, out)
+}
+
+// redirect sends the visitor to the original address and records the visit.
+// A visit that cannot be written must not break the redirect itself.
+func (h *Handler) redirect(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	link, err := h.store.GetLinkByShortName(ctx, c.Param("code"))
+	if err != nil {
+		abortStoreError(c, err)
+		return
+	}
+
+	_, err = h.store.CreateLinkVisit(ctx, store.CreateLinkVisitParams{
+		LinkID:    link.ID,
+		Ip:        c.ClientIP(),
+		UserAgent: c.Request.UserAgent(),
+		Referer:   c.Request.Referer(),
+		Status:    redirectStatus,
+	})
+	if err != nil {
+		_ = c.Error(err)
+	}
+
+	c.Redirect(redirectStatus, link.OriginalUrl)
 }
 
 func (h *Handler) get(c *gin.Context) {

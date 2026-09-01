@@ -45,6 +45,11 @@ func initSentry() bool {
 
 func newRouter(withSentry bool, handler *api.Handler, allowedOrigins []string) *gin.Engine {
 	router := gin.New()
+
+	// Render sits behind Cloudflare, so the client IP comes from its header;
+	// without this the recorded visit would carry the proxy's address.
+	router.TrustedPlatform = gin.PlatformCloudflare
+
 	router.Use(gin.Logger(), gin.Recovery())
 
 	if len(allowedOrigins) > 0 {

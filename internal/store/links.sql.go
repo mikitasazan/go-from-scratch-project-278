@@ -9,6 +9,17 @@ import (
 	"context"
 )
 
+const countLinkVisits = `-- name: CountLinkVisits :one
+SELECT count(*) FROM link_visits
+`
+
+func (q *Queries) CountLinkVisits(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countLinkVisits)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countLinks = `-- name: CountLinks :one
 SELECT count(*) FROM links
 `
@@ -38,6 +49,41 @@ func (q *Queries) CreateLink(ctx context.Context, arg CreateLinkParams) (Link, e
 		&i.ID,
 		&i.OriginalUrl,
 		&i.ShortName,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createLinkVisit = `-- name: CreateLinkVisit :one
+INSERT INTO link_visits (link_id, ip, user_agent, referer, status)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, link_id, ip, user_agent, referer, status, created_at
+`
+
+type CreateLinkVisitParams struct {
+	LinkID    int64  `json:"link_id"`
+	Ip        string `json:"ip"`
+	UserAgent string `json:"user_agent"`
+	Referer   string `json:"referer"`
+	Status    int32  `json:"status"`
+}
+
+func (q *Queries) CreateLinkVisit(ctx context.Context, arg CreateLinkVisitParams) (LinkVisit, error) {
+	row := q.db.QueryRow(ctx, createLinkVisit,
+		arg.LinkID,
+		arg.Ip,
+		arg.UserAgent,
+		arg.Referer,
+		arg.Status,
+	)
+	var i LinkVisit
+	err := row.Scan(
+		&i.ID,
+		&i.LinkID,
+		&i.Ip,
+		&i.UserAgent,
+		&i.Referer,
+		&i.Status,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -90,6 +136,80 @@ func (q *Queries) GetLinkByShortName(ctx context.Context, shortName string) (Lin
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const listLinkVisits = `-- name: ListLinkVisits :many
+SELECT id, link_id, ip, user_agent, referer, status, created_at
+FROM link_visits
+ORDER BY id
+`
+
+func (q *Queries) ListLinkVisits(ctx context.Context) ([]LinkVisit, error) {
+	rows, err := q.db.Query(ctx, listLinkVisits)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LinkVisit{}
+	for rows.Next() {
+		var i LinkVisit
+		if err := rows.Scan(
+			&i.ID,
+			&i.LinkID,
+			&i.Ip,
+			&i.UserAgent,
+			&i.Referer,
+			&i.Status,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLinkVisitsRange = `-- name: ListLinkVisitsRange :many
+SELECT id, link_id, ip, user_agent, referer, status, created_at
+FROM link_visits
+ORDER BY id
+LIMIT $1 OFFSET $2
+`
+
+type ListLinkVisitsRangeParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+func (q *Queries) ListLinkVisitsRange(ctx context.Context, arg ListLinkVisitsRangeParams) ([]LinkVisit, error) {
+	rows, err := q.db.Query(ctx, listLinkVisitsRange, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LinkVisit{}
+	for rows.Next() {
+		var i LinkVisit
+		if err := rows.Scan(
+			&i.ID,
+			&i.LinkID,
+			&i.Ip,
+			&i.UserAgent,
+			&i.Referer,
+			&i.Status,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listLinks = `-- name: ListLinks :many
